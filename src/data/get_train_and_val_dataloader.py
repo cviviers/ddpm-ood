@@ -126,7 +126,7 @@ def get_training_data_loader(
             transforms.RandFlipD(keys=["image"], spatial_axis=1, prob=1.0)
             if add_hflip
             else lambda x: x,
-            transforms.ToTensord(keys=["image"], dtype=torch.int32),
+            transforms.ToTensord(keys=["image"]),
         ]
     )
 
@@ -139,9 +139,9 @@ def get_training_data_loader(
             # else lambda x: x,  # needed for BRATs data with 4 modalities in 1
             # central_crop_transform,
             #resize_transform,
-            Scale_Image_Intensity(0.7),
-            AddGaussianNoise(mu=1, std=0.1, type_of_noise='multiplicative', return_noisy_img_only=True), 
-            AddGaussianNoise(mu=0, std=0.05, type_of_noise='additive', return_noisy_img_only=True), 
+            transforms.ScaleIntensityd(keys=["image"], minv=0.0, maxv=0.7),
+            AddGaussianNoise(mu=1, std=0.1, type_of_noise='multiplicative', return_noisy_img_only=True, max_value=1.0), 
+            AddGaussianNoise(mu=0, std=0.05, type_of_noise='additive', return_noisy_img_only=True, max_value=1.0), 
 
             transforms.ToTensord(keys=["image"]),
         ]
