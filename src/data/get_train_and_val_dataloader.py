@@ -71,9 +71,9 @@ class AddGaussianNoise(object):
             noisy_img = img+noise
 
         if self.return_noisy_img_only:
-            data['image'] = noisy_img.clip(0, self.max_value)
+            data['image'] = noisy_img.clip(0, self.max_value).astype(np.float32)
         else:
-            data['image'] = np.stack([data['image'], noisy_img.clip(0, self.max_value), noise])
+            data['image'] = np.stack([data['image'].astype(np.float32), noisy_img.clip(0, self.max_value).astype(np.float32), noise.astype(np.float32)])
 
         return data
 
