@@ -72,18 +72,18 @@ def download_data(data_root, download_celeba):
             img_np = np.array(img).transpose((2, 0, 1))
             np.save(out_dir / f"{dataset_name}_{i}.npy", img_np)
 
-    # CelebA
-    root = Path(data_root) / "CelebA" / "raw"
-    for set in ["train", "valid", "test"]:
-        dataset = CelebA(root=root, split=set, download=download_celeba)
-        dataset_name = dataset.__class__.__name__
-        out_dir = root.parent / "numpy" / set
-        out_dir.mkdir(parents=True, exist_ok=True)
-        for i in range(len(dataset)):
-            img, label = dataset[i]
-            img = img.resize((32, 32))
-            img_np = np.array(img).transpose((2, 0, 1))
-            np.save(out_dir / f"{dataset_name}_{i}.npy", img_np)
+    # # CelebA
+    # root = Path(data_root) / "CelebA" / "raw"
+    # for set in ["train", "valid", "test"]:
+    #     dataset = CelebA(root=root, split=set, download=download_celeba)
+    #     dataset_name = dataset.__class__.__name__
+    #     out_dir = root.parent / "numpy" / set
+    #     out_dir.mkdir(parents=True, exist_ok=True)
+    #     for i in range(len(dataset)):
+    #         img, label = dataset[i]
+    #         img = img.resize((32, 32))
+    #         img_np = np.array(img).transpose((2, 0, 1))
+    #         np.save(out_dir / f"{dataset_name}_{i}.npy", img_np)
 
 
 def save_list_as_csv(list, output_path):

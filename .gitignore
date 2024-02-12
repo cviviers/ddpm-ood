@@ -166,3 +166,6 @@ cython_debug/
 cluster/*
 papers/*
 docker/create_docker_image_*
+
+data/*
+output/*
