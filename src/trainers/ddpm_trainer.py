@@ -77,6 +77,8 @@ class DDPMTrainer(BaseTrainer):
         self.model.train()
         for step, batch in progress_bar:
             images = self.vqvae_model.encode_stage_2_inputs(batch["image"].to(self.device))
+            print(f"{torch.amax(images)=}")
+            print(f"{torch.amin(images)=}")
             if self.do_latent_pad:
                 with torch.no_grad():
                     images = F.pad(input=images, pad=self.latent_pad, mode="constant", value=0)

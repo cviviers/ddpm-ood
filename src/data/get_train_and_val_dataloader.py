@@ -2,7 +2,8 @@ import pandas as pd
 import torch.distributed as dist
 from monai import transforms
 from monai.data import CacheDataset, Dataset, ThreadDataLoader, partition_dataset
-
+import numpy as np
+import torch
 
 def get_data_dicts(ids_path: str, shuffle: bool = False, first_n=False):
 
@@ -32,6 +33,49 @@ def get_data_dicts(ids_path: str, shuffle: bool = False, first_n=False):
     else:
         return data_dicts
 
+class Scale_Image_Intensity(object):
+    def __init__(self, scale) -> None:
+        super().__init__()
+        self.scale = scale
+    def __call__(self, img):
+ 
+        img['image'] = img['image'] * self.scale
+
+        return img
+
+class AddGaussianNoise(object):
+    def __init__(self, std, mu, type_of_noise='multiplicative', return_noisy_img_only = False, bit_depth=8, max_value=None) -> None:
+        super().__init__()
+        self.std = std
+        self.mu = mu
+        self.type = type_of_noise
+        self.return_noisy_img_only = return_noisy_img_only
+        self.bit_depth = bit_depth
+        if max_value is None:
+            self.max_value = np.power(2, bit_depth)-1
+        else:
+            self.max_value = max_value
+
+    def __call__(self, data):
+
+        img = data['image']
+
+        # print(np.amax(data['image']))
+        # print(np.amin(data['image']))
+
+        if self.type == 'multiplicative':
+            noise = np.random.normal(loc=self.mu, scale=self.std*self.max_value, size=img.shape)
+            noisy_img = img*noise
+        elif self.type == 'additive':
+            noise = np.random.normal(loc=self.mu, scale=self.std*self.max_value, size=img.shape)
+            noisy_img = img+noise
+
+        if self.return_noisy_img_only:
+            data['image'] = noisy_img.clip(0, self.max_value)
+        else:
+            data['image'] = np.stack([data['image'], noisy_img.clip(0, self.max_value), noise])
+
+        return data
 
 def get_training_data_loader(
     batch_size: int,
@@ -64,6 +108,8 @@ def get_training_data_loader(
         else lambda x: x
     )
 
+
+
     val_transforms = transforms.Compose(
         [
             transforms.LoadImaged(keys=["image"]),
@@ -80,15 +126,32 @@ def get_training_data_loader(
             transforms.RandFlipD(keys=["image"], spatial_axis=1, prob=1.0)
             if add_hflip
             else lambda x: x,
+            transforms.ToTensord(keys=["image"], dtype=torch.int32),
+        ]
+    )
+
+    new_val_transforms = transforms.Compose(
+        [
+            transforms.LoadImaged(keys=["image"]),
+            transforms.EnsureChannelFirstd(keys=["image"]) if is_grayscale else lambda x: x,
+            # transforms.Lambdad(keys="image", func=lambda x: x[0, None, ...])
+            # if is_grayscale
+            # else lambda x: x,  # needed for BRATs data with 4 modalities in 1
+            # central_crop_transform,
+            #resize_transform,
+            Scale_Image_Intensity(0.7),
+            AddGaussianNoise(mu=1, std=0.1, type_of_noise='multiplicative', return_noisy_img_only=True), 
+            AddGaussianNoise(mu=0, std=0.05, type_of_noise='additive', return_noisy_img_only=True), 
+
             transforms.ToTensord(keys=["image"]),
         ]
     )
 
     # no augmentation for now
     if augmentation:
-        train_transforms = val_transforms
+        train_transforms = new_val_transforms
     else:
-        train_transforms = val_transforms
+        train_transforms = new_val_transforms
 
     val_dicts = get_data_dicts(validation_ids, shuffle=False, first_n=first_n)
     if first_n:
@@ -97,12 +160,12 @@ def get_training_data_loader(
     if cache_data:
         val_ds = CacheDataset(
             data=val_dicts,
-            transform=val_transforms,
+            transform=new_val_transforms,
         )
     else:
         val_ds = Dataset(
             data=val_dicts,
-            transform=val_transforms,
+            transform=new_val_transforms,
         )
     print(val_ds[0]["image"].shape)
     val_loader = ThreadDataLoader(
