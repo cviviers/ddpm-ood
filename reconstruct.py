@@ -136,7 +136,18 @@ def parse_args():
         default=1,
         help="Perform fewer reconstructions by skipping some of the t-values as starting points.",
     )
-
+    parser.add_argument(
+        "--max_t",
+        type=int,
+        default=1000,
+        help="Maximum T to consider reconstructions from.",
+    )
+    parser.add_argument(
+        "--min_t",
+        type=int,
+        default=0,
+        help="Minimum T to consider reconstructions from.",
+    )
     args = parser.parse_args()
     return args
 

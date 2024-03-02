@@ -23,7 +23,8 @@ from .base import BaseTrainer
 
 def shuffle(x):
     return np.transpose(x.cpu().numpy(), (1, 2, 0))
-
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 class Reconstruct(BaseTrainer):
     def __init__(self, args):
@@ -33,43 +34,43 @@ class Reconstruct(BaseTrainer):
         # set up dirs
         self.out_dir = self.run_dir / "ood"
         self.out_dir.mkdir(exist_ok=True)
+        if args.run_in != 0:
+            # set up loaders
+            self.val_loader = get_training_data_loader(
+                batch_size=args.batch_size,
+                training_ids=args.validation_ids,
+                validation_ids=args.validation_ids,
+                augmentation=bool(args.augmentation),
+                only_val=True,
+                num_workers=args.num_workers,
+                num_val_workers=args.num_workers,
+                cache_data=bool(args.cache_data),
+                drop_last=bool(args.drop_last),
+                first_n=int(args.first_n_val) if args.first_n_val else args.first_n_val,
+                is_grayscale=bool(args.is_grayscale),
+                spatial_dimension=args.spatial_dimension,
+                image_size=self.image_size,
+                image_roi=args.image_roi,
+            )
+        if args.run_val != 0:
+            self.in_loader = get_training_data_loader(
+                batch_size=args.batch_size,
+                training_ids=args.in_ids,
+                validation_ids=args.in_ids,
+                augmentation=bool(args.augmentation),
+                only_val=True,
+                num_workers=args.num_workers,
+                num_val_workers=args.num_workers,
+                cache_data=bool(args.cache_data),
+                drop_last=bool(args.drop_last),
+                first_n=int(args.first_n) if args.first_n else args.first_n,
+                is_grayscale=bool(args.is_grayscale),
+                spatial_dimension=args.spatial_dimension,
+                image_size=self.image_size,
+                image_roi=args.image_roi,
+            )
 
-        # set up loaders
-        self.val_loader = get_training_data_loader(
-            batch_size=args.batch_size,
-            training_ids=args.validation_ids,
-            validation_ids=args.validation_ids,
-            augmentation=bool(args.augmentation),
-            only_val=True,
-            num_workers=args.num_workers,
-            num_val_workers=args.num_workers,
-            cache_data=bool(args.cache_data),
-            drop_last=bool(args.drop_last),
-            first_n=int(args.first_n_val) if args.first_n_val else args.first_n_val,
-            is_grayscale=bool(args.is_grayscale),
-            spatial_dimension=args.spatial_dimension,
-            image_size=self.image_size,
-            image_roi=args.image_roi,
-        )
-
-        self.in_loader = get_training_data_loader(
-            batch_size=args.batch_size,
-            training_ids=args.in_ids,
-            validation_ids=args.in_ids,
-            augmentation=bool(args.augmentation),
-            only_val=True,
-            num_workers=args.num_workers,
-            num_val_workers=args.num_workers,
-            cache_data=bool(args.cache_data),
-            drop_last=bool(args.drop_last),
-            first_n=int(args.first_n) if args.first_n else args.first_n,
-            is_grayscale=bool(args.is_grayscale),
-            spatial_dimension=args.spatial_dimension,
-            image_size=self.image_size,
-            image_roi=args.image_roi,
-        )
-
-    def get_scores(self, loader, dataset_name, inference_skip_factor):
+    def get_scores(self, loader, dataset_name, inference_skip_factor, max_t, min_t):
         if dist.is_initialized():
             # temporarily enable logging on every node
             sys.stdout = sys.__stdout__
@@ -92,7 +93,10 @@ class Reconstruct(BaseTrainer):
         #     weights=torch.Tensor([0.0448, 0.2856]).to(self.device),
         # )
 
+        count_parameters(self.model)
+
         self.model.eval()
+
         with torch.no_grad():
             for batch in loader:
                 pndm_scheduler = PNDMScheduler(
@@ -115,10 +119,15 @@ class Reconstruct(BaseTrainer):
                     pndm_scheduler.betas = new_betas
                     pndm_scheduler.alphas = new_alphas
                     pndm_scheduler.alphas_cumprod = new_alphas_cumprod
+
                 pndm_scheduler.set_timesteps(100)
                 pndm_timesteps = pndm_scheduler.timesteps
                 pndm_start_points = reversed(pndm_timesteps)[1::inference_skip_factor]
+                
+                pndm_start_points = pndm_start_points[(pndm_start_points<max_t)]
+                pndm_start_points = pndm_start_points[(pndm_start_points>min_t)]
 
+                print(f"pndm_start_points: {pndm_start_points}")
                 t1 = time.time()
                 images_original = batch["image"].to(self.device)
                 images = self.vqvae_model.encode_stage_2_inputs(images_original)
@@ -203,6 +212,7 @@ class Reconstruct(BaseTrainer):
                             }
                         )
                     # plot
+                    continue
                     if not dist.is_initialized():
                         import matplotlib.pyplot as plt
 
@@ -251,13 +261,13 @@ class Reconstruct(BaseTrainer):
 
     def reconstruct(self, args):
         if bool(args.run_val):
-            results_list = self.get_scores(self.val_loader, "val", args.inference_skip_factor)
+            results_list = self.get_scores(self.val_loader, "val", args.inference_skip_factor, args.max_t, args.min_t)
 
             results_df = pd.DataFrame(results_list)
             results_df.to_csv(self.out_dir / "results_val.csv")
 
         if bool(args.run_in):
-            results_list = self.get_scores(self.in_loader, "in", args.inference_skip_factor)
+            results_list = self.get_scores(self.in_loader, "in", args.inference_skip_factor, args.max_t, args.min_t)
 
             results_df = pd.DataFrame(results_list)
             results_df.to_csv(self.out_dir / "results_in.csv")
@@ -308,8 +318,10 @@ class Reconstruct(BaseTrainer):
                     dataset_name = Path(out).stem.split("_")[0] + "_hflip"
 
                 else:
+                    print(out)
+                    print('Running ood data')
                     out_loader = get_training_data_loader(
-                        batch_size=args.batch_size,
+                        batch_size=1,
                         training_ids=out,
                         validation_ids=out,
                         augmentation=bool(args.augmentation),
@@ -323,8 +335,11 @@ class Reconstruct(BaseTrainer):
                         spatial_dimension=args.spatial_dimension,
                         image_size=self.image_size,
                         image_roi=args.image_roi,
+                        # sd_sigma=0.1,
+                        # sigma = 0.1
+
                     )
-                    dataset_name = Path(out).stem.split("_")[0]
-                results_list = self.get_scores(out_loader, "out", args.inference_skip_factor)
+                    dataset_name = Path(out).stem.replace('.csv', '')
+                results_list = self.get_scores(out_loader, "out", args.inference_skip_factor, args.max_t, args.min_t)
                 results_df = pd.DataFrame(results_list)
                 results_df.to_csv(self.out_dir / f"results_{dataset_name}.csv")

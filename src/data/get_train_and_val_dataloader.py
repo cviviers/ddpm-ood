@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 def get_data_dicts(ids_path: str, shuffle: bool = False, first_n=False):
-
+    print(ids_path)
     """Get data dicts for data loaders."""
     df = pd.read_csv(ids_path, sep=",")
     if shuffle:
@@ -94,6 +94,8 @@ def get_training_data_loader(
     image_size=None,
     image_roi=None,
     spatial_dimension=2,
+    sd_sigma = 0.1,
+    sigma = 0.05,
 ):
     # Define transformations
     resize_transform = (
@@ -130,28 +132,28 @@ def get_training_data_loader(
         ]
     )
 
-    new_val_transforms = transforms.Compose(
-        [
-            transforms.LoadImaged(keys=["image"]),
-            transforms.EnsureChannelFirstd(keys=["image"]) if is_grayscale else lambda x: x,
-            # transforms.Lambdad(keys="image", func=lambda x: x[0, None, ...])
-            # if is_grayscale
-            # else lambda x: x,  # needed for BRATs data with 4 modalities in 1
-            # central_crop_transform,
-            #resize_transform,
-            transforms.ScaleIntensityd(keys=["image"], minv=0.0, maxv=0.7),
-            AddGaussianNoise(mu=1, std=0.1, type_of_noise='multiplicative', return_noisy_img_only=True, max_value=1.0), 
-            AddGaussianNoise(mu=0, std=0.05, type_of_noise='additive', return_noisy_img_only=True, max_value=1.0), 
+    # new_val_transforms = transforms.Compose(
+    #     [
+    #         transforms.LoadImaged(keys=["image"]),
+    #         transforms.EnsureChannelFirstd(keys=["image"]) if is_grayscale else lambda x: x,
+    #         # transforms.Lambdad(keys="image", func=lambda x: x[0, None, ...])
+    #         # if is_grayscale
+    #         # else lambda x: x,  # needed for BRATs data with 4 modalities in 1
+    #         # central_crop_transform,
+    #         #resize_transform,
+    #         transforms.ScaleIntensityd(keys=["image"], minv=0.0, maxv=0.7),
+    #         AddGaussianNoise(mu=1, std=sd_sigma, type_of_noise='multiplicative', return_noisy_img_only=True, max_value=1.0), 
+    #         AddGaussianNoise(mu=0, std=sigma, type_of_noise='additive', return_noisy_img_only=True, max_value=1.0), 
 
-            transforms.ToTensord(keys=["image"]),
-        ]
-    )
+    #         transforms.ToTensord(keys=["image"]),
+    #     ]
+    # )
 
     # no augmentation for now
     if augmentation:
-        train_transforms = new_val_transforms
+        train_transforms = val_transforms
     else:
-        train_transforms = new_val_transforms
+        train_transforms = val_transforms
 
     val_dicts = get_data_dicts(validation_ids, shuffle=False, first_n=first_n)
     if first_n:
@@ -160,12 +162,12 @@ def get_training_data_loader(
     if cache_data:
         val_ds = CacheDataset(
             data=val_dicts,
-            transform=new_val_transforms,
+            transform=val_transforms,
         )
     else:
         val_ds = Dataset(
             data=val_dicts,
-            transform=new_val_transforms,
+            transform=val_transforms,
         )
     print(val_ds[0]["image"].shape)
     val_loader = ThreadDataLoader(

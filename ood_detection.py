@@ -7,10 +7,12 @@ import pandas as pd
 from generative.networks.schedulers import PNDMScheduler
 from monai.config import print_config
 from monai.utils import set_determinism
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, roc_curve
 
 warnings.filterwarnings("ignore")
 
+def load_txt(path :str) -> list:
+    return [line.rstrip('\n') for line in open(path)]
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -31,6 +33,12 @@ def parse_args():
         default=0,
         help="Minimum T to consider reconstructions from.",
     )
+    parser.add_argument(
+        "--val_file",
+        type=str,
+
+    )
+
     parser.add_argument("--t_skip", type=int, default=1, help="Only use every n reconstructions.")
 
     args = parser.parse_args()
@@ -49,13 +57,19 @@ def main(args):
 
     out_dir = run_dir / "ood"
     out_dir.mkdir(exist_ok=True)
-    results_df_val = pd.read_csv(out_dir / "results_val.csv")
+
+    # in_file = args.in_file
+    val_file = args.val_file
+
+    results_df_val = pd.read_csv(val_file)
     # using the dataloader with DDP can cause an image to have multiple sets or results - fix this
     results_df_val.drop_duplicates(subset=["filename", "t"], keep="first", inplace=True)
+
+
     all_t_values = results_df_val["t"].unique()
     MAX_T = args.max_t
     MIN_T = args.min_t
-    T_SKIP_FACTOR = 1
+    T_SKIP_FACTOR = args.t_skip
     t_values = all_t_values[::T_SKIP_FACTOR]
     t_values = t_values[(t_values < MAX_T)]
     t_values = t_values[(MIN_T < t_values)]
@@ -70,8 +84,8 @@ def main(args):
         steps_for_this_t = pndm_timesteps[pndm_timesteps <= t]
         total_steps += len(steps_for_this_t)
     # plot_target = "perceptual_difference"
-    plot_target = "mse"
-    # plot_target = "mse+perceptual"
+    # plot_target = "mse"
+    plot_target = "mse+perceptual"
     # plot_target = "ssim"
     print(
         f"SETTING MAX_T to {MAX_T} and T_SKIP to {T_SKIP_FACTOR} with a total of"
@@ -95,7 +109,18 @@ def main(args):
     elif "mnist" in model:
         out_data = ("FashionMNIST", "MNIST_vflip", "MNIST_hflip")
     elif "cifar10" in model:
-        out_data = ("SVHN", "CelebA", "CIFAR10_vflip", "CIFAR10_hflip")
+        # out_data = ("SVHN", "CelebA", "CIFAR10_vflip", "CIFAR10_hflip")
+        # out_data
+        
+
+        curruption_list = load_txt(r"/media/chris/My Passport/Philips/Anomaly/CIFAR/corruptions")
+        out_data = []
+        for corrupt in curruption_list:
+            if corrupt == 'natural':
+                continue
+            for severity in range(1,6):
+                out_data.append('CIFAR10C_test_'+corrupt+'_'+str(severity))
+
     elif "celeba" in model.lower():
         out_data = ("CIFAR10", "SVHN", "CelebA_vflip", "CelebA_hflip")
     elif "svhn" in model:
@@ -146,6 +171,7 @@ def main(args):
         results_df_in = results_df_in[results_df_in["t"].isin(t_values)]
         results_df_out = results_df_out[results_df_out["t"].isin(t_values)]
         results_df = pd.concat((results_df_in, results_df_out))
+
         # get z-scores for each plot_target using the val-set
         for target in ["perceptual_difference", "mse"]:
             # compute mean and std for each t value on the va
@@ -174,22 +200,24 @@ def main(args):
         results_df_mean = results_df.groupby(["filename", "type"]).mean().reset_index()
 
         # do some plotting
-        import matplotlib.pyplot as plt
+        if False:
+            import matplotlib.pyplot as plt
 
-        plt.figure()
-        colors = {"in": "b", "out": "r"}
-        for type in ["in", "out"]:
-            plot_df = results_df.loc[results_df["type"] == type]
-            unique_ids = plot_df["filename"].unique()
+            plt.figure()
+            colors = {"in": "b", "out": "r"}
+            for type in ["in", "out"]:
+                plot_df = results_df.loc[results_df["type"] == type]
+                unique_ids = plot_df["filename"].unique()
 
-            for id in unique_ids[:50]:
-                plt.plot(
-                    plot_df.loc[plot_df["filename"] == id]["t"],
-                    plot_df.loc[plot_df["filename"] == id][f"z_score_{plot_target}"],
-                    color=colors[type],
-                    alpha=0.3,
-                )
-        plt.show()
+                for id in unique_ids[:50]:
+                    plt.plot(
+                        plot_df.loc[plot_df["filename"] == id]["t"],
+                        plot_df.loc[plot_df["filename"] == id][f"z_score_{plot_target}"],
+                        color=colors[type],
+                        alpha=0.3,
+                    )
+            plt.title(out_dataset)
+            plt.show()
         # calculate ROC scores
         # in-distribution scores/class
         all_scores = results_df_mean.loc[results_df_mean["type"] == "in"][[target]].values.tolist()
@@ -204,24 +232,39 @@ def main(args):
         )
         # compute ROC
         roc_score = roc_auc_score(all_class, all_scores)
+        # compute FPR at 95
+        fpr, tpr, thresholds = roc_curve(all_class, all_scores)
+        fpr_95 = fpr[np.argmax(tpr >= 0.95)]
+        # print(f"{tnr=}")
+
         print(f"n_val={num_val_images} n_in={num_in_images} n_out={num_out_images}")
         method_name = f"Zscore_{plot_target}"
         # store values to print later
         if method_name in all_results_dict[model]:
             all_results_dict[model][method_name].extend([roc_score])
+            all_results_dict[model][method_name+'fpr'].extend([fpr_95])
             all_results_dict[model]["ood_data"].extend([out_dataset])
         else:
             all_results_dict[model][method_name] = [roc_score]
+            all_results_dict[model][method_name+'fpr'] = [fpr_95]
             all_results_dict[model]["ood_data"] = [out_dataset]
 
+    import csv
+    with open('results_20_with_fpr.csv', 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
     # print results--output_dir=${output_root} \
-    for method in [f"Zscore_{plot_target}"]:
-        ood_datasets = all_results_dict[model]["ood_data"]
-        scores = all_results_dict[model][method]
-        for o, s in zip(ood_datasets, scores):
-            print(f"AUC for {model} vs {o}: {s * 100:.1f}")
-        print(f"Average AUC: {np.mean(scores) * 100:.1f}")
-
+        for method in [f"Zscore_{plot_target}"]:
+            ood_datasets = all_results_dict[model]["ood_data"]
+            scores = all_results_dict[model][method]
+            fprs = all_results_dict[model][method+'fpr'] 
+            for o, s, t in zip(ood_datasets, scores, fprs):
+                print(f"AUC for {model} vs {o}: {s * 100:.1f}")
+                print(f"TNR95 for {model} vs {o}: {t * 100:.1f}")
+                writer.writerow([o, s * 100, t*100])
+            print(f"Average AUC: {np.mean(scores) * 100:.1f}")
+            print(f"Average FPR: {np.mean(fprs) * 100:.1f}")
+            writer.writerow(['mean', np.mean(scores) * 100, np.mean(fprs) * 100])
+            
 
 if __name__ == "__main__":
     args = parse_args()
@@ -229,4 +272,5 @@ if __name__ == "__main__":
     for model in args.model_name.split(","):
         args_copy = args
         args_copy.model_name = model
+
         main(args_copy)
